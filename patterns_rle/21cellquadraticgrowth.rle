@@ -1,0 +1,7 @@
+#N 21cellquadraticgrowth.rle
+#O dani, 2022
+#C https://conwaylife.com/wiki/21-cell_quadratic_growth
+#C https://www.conwaylife.com/patterns/21cellquadraticgrowth.rle
+x = 266, y = 164, rule = B3/S23
+bo$2bo$3o122$221bo$221b2o19$261bobo$260bo$261bo2bo$263b3o14$143b3o$
+146bo$146bo!
