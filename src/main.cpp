@@ -10,127 +10,24 @@
 #include <fstream>
 #include <future>
 #include <thread>
+#include "types.hpp"
+#include "SimWorker.hpp"
 
 namespace fs = std::filesystem;
 
 void draw_imgui();
 void draw();
-//void push_dummy_data();
 void load_patterns_info();
 void load_pattern(const std::string& filePath);
 
-struct Vec2 {
-    int x, y;
-
-    bool operator==(const Vec2& other) const {
-        return x == other.x && y == other.y;
-    }
-
-    Vec2 operator+(const Vec2& other) const {
-        return { x + other.x, y + other.y };
-    }
-
-    Vec2 operator-(const Vec2& other) const {
-        return { x - other.x, y - other.y };
-    }
-
-    Vec2& operator+=(const Vec2& other) {
-        x += other.x;
-        y += other.y;
-        return *this;
-    }
-
-    Vec2& operator-=(const Vec2& other) {
-        x -= other.x;
-        y -= other.y;
-        return *this;
-    }
-
-    Vec2& operator*=(int scalar) {
-        x *= scalar;
-        y *= scalar;
-        return *this;
-    }
-};
-
-struct Vec2f {
-    float x, y;
-
-    bool operator==(const Vec2f& other) const {
-        return x == other.x && y == other.y;
-    }
-
-    Vec2f operator+(const Vec2f& other) const {
-        return { x + other.x, y + other.y };
-    }
-
-    Vec2f operator-(const Vec2f& other) const {
-        return { x - other.x, y - other.y };
-    }
-
-    Vec2f& operator+=(const Vec2f& other) {
-        x += other.x;
-        y += other.y;
-        return *this;
-    }
-
-    Vec2f& operator-=(const Vec2f& other) {
-        x -= other.x;
-        y -= other.y;
-        return *this;
-    }
-
-    Vec2f& operator*=(float scalar) {
-        x *= scalar;
-        y *= scalar;
-        return *this;
-    }
-};
-
-struct Vec2Hasher {
-    std::size_t operator()(const Vec2& p) const {
-        return std::hash<int>{}(p.x) ^
-            (std::hash<int>{}(p.y) << 1);
-    }
-};
-
-struct AppState {
-    SDL_Window* window = nullptr;
-    SDL_Renderer* renderer = nullptr;
-    bool vsync = false;
-    double deltaTime = 0.0;
-    double lastTime = 0.0;
-};
-
-struct GameState {
-    std::unordered_set<Vec2, Vec2Hasher> cells;
-    bool isPlaying = false;
-    float accumulator = 0.0f;
-    float steptime = 1.0f;
-    int stepcount = 0;
-};
-
-struct EditorState {
-    int step = 0;
-    float cameraZoom = 1.0f;
-    Vec2f cameraDrag{ 0.0f, 0.0f };
-    bool moveableCanvas = false;
-    int nrCellsOutsideBoundary = 0;
-    int nrCellsVisible = 0;
-    int selectedPatternIndex = -1;
-};
-
-using StepResult = std::pair<
-    std::vector<Vec2>,
-    std::vector<Vec2>
->;
 
 std::vector<std::string> patternFiles;
-std::future<StepResult> asyncfuture;
 
 AppState appState{};
 GameState gameState{};
 EditorState editorState{};
+
+SimWorker simWorker{};
 
 int main() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -253,12 +150,9 @@ void load_pattern(const std::string& filePath) {
     const char* bfr_ptr = bfr_str.c_str();
     const char* bfr_end = bfr_str.size() + bfr_ptr;
 
-
-
     int count = 0;
     int x = 0;
     int y = 0;
-
 
     // parse rle
     while (bfr_ptr < bfr_end) {
@@ -330,7 +224,7 @@ void draw_imgui() {
     if (ImGui::BeginTabBar("DebugTabs")) {
 
         // --- Stats: read-only info about current performance/state ---
-        if (ImGui::BeginTabItem("Stats")) {
+        if (ImGui::BeginTabItem("Debug")) {
             ImGui::Text("graphics api: %s", SDL_GetRendererName(appState.renderer));
             ImGui::Text("fps: %.3f", ImGui::GetIO().Framerate);
             ImGui::Separator();
@@ -338,6 +232,7 @@ void draw_imgui() {
             ImGui::Text("total cells: %i", editorState.nrCellsOutsideBoundary + editorState.nrCellsVisible);
             ImGui::Text("cells visible: %i", editorState.nrCellsVisible);
             ImGui::Text("cells culled: %i", editorState.nrCellsOutsideBoundary);
+            ImGui::Text("cpu compute time: %fms", editorState.cpuComputeTime);
             ImGui::EndTabItem();
         }
 
@@ -345,7 +240,7 @@ void draw_imgui() {
         if (ImGui::BeginTabItem("Simulation")) {
             ImGui::Checkbox("play simulation", &gameState.isPlaying);
 
-            ImGui::SliderFloat("step time", &gameState.steptime, 0.01f, 1.0f, "%.3f", 0);
+            ImGui::SliderFloat("step time", &gameState.steptime, 0.010f, 1.0f, "%.3f", 0);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("time taken (in seconds) to complete 1 step of conway's game of life.");
             }
@@ -377,8 +272,7 @@ void draw_imgui() {
 
                 ImGui::BeginDisabled(editorState.selectedPatternIndex < 0);
                 if (ImGui::Button("Load Pattern")) {
-                    if (asyncfuture.valid())
-                        asyncfuture.get();
+                    simWorker.waitForWork();
 
                     gameState.cells.clear();
                     gameState.accumulator = 0.0;
@@ -423,33 +317,37 @@ void draw_imgui() {
     ImGui::Render();
 }
 
-StepResult step(const std::unordered_set<Vec2, Vec2Hasher>& cells) {
+void step(const std::unordered_set<Vec2, Vec2Hasher>& cells, StepScratch& stepScratch) {
+    auto start = std::chrono::steady_clock::now();
     constexpr Vec2 neighbours[8] = {
         {-1, 0}, {-1, -1}, {0, -1}, {1, -1},
         {1, 0}, {1, 1}, {0, 1}, {-1, 1},
     };
 
-    std::vector<Vec2> toErase;
-    std::vector<Vec2> toBirth;
-    std::unordered_set<Vec2, Vec2Hasher> deadNeighbours;
+    stepScratch.toErase.clear();
+    stepScratch.toBirth.clear();
+    stepScratch.neighbourCounts.clear();
 
     for (auto& cell : cells) {
-        int nc = 0;
-        for (const auto& neighbour : neighbours) {
-            if (cells.contains(cell + neighbour)) nc++;
-            else deadNeighbours.insert(cell + neighbour);
+        stepScratch.neighbourCounts[cell];
+        for (auto& neighbour: neighbours) {
+            stepScratch.neighbourCounts[cell + neighbour]++;
         }
-        if (nc > 3 || nc < 2) toErase.push_back(cell);
     }
 
-    for (auto& deadCell : deadNeighbours) {
-        int nc = 0;
-        for (const auto& neighbour : neighbours)
-            if (cells.contains(deadCell + neighbour)) nc++;
-        if (nc == 3) toBirth.push_back(deadCell);
+    for (auto& [cell_, nc] : stepScratch.neighbourCounts) {
+        bool isAlive = cells.contains(cell_);
+        
+        if (isAlive && (nc > 3 || nc < 2)) {
+            stepScratch.toErase.push_back(cell_);
+        } else if (nc == 3 && !isAlive) {
+            stepScratch.toBirth.push_back(cell_);
+        }
     }
 
-    return { std::move(toErase), std::move(toBirth) };
+    // for benchmarking purposes
+    auto end = std::chrono::steady_clock::now();
+    stepScratch.computeTime = std::chrono::duration<double, std::milli>(end - start).count();
 }
 
 void calculate_delta_time() {
@@ -497,8 +395,10 @@ void submitSquareDraw(float x, float y, std::vector<SDL_Vertex>& vertices, std::
 }
 
 void draw_cells() {
-    std::vector<SDL_Vertex> vertices;
-    std::vector<int> indices;
+    static std::vector<SDL_Vertex> vertices;
+    static std::vector<int> indices;
+    vertices.clear();
+    indices.clear();
 
     int w, h;
     SDL_GetWindowSize(appState.window, &w, &h);
@@ -528,29 +428,37 @@ void draw_cells() {
     SDL_RenderGeometry(appState.renderer, nullptr, vertices.data(), vertices.size(), indices.data(), indices.size());
 }
 
+StepScratch stepScratch{};
 
 void draw() {
     calculate_delta_time();
+    
+    // limit main thread freeze due to accumulator compounding
+    static constexpr int nrMaxSteps = 4;
+    static int nrSteps = 0;
 
     // step logic
-
     if (gameState.isPlaying) {
-    
-        
         gameState.accumulator += appState.deltaTime;
         while (gameState.accumulator >= gameState.steptime) {
             gameState.accumulator -= gameState.steptime;
+            nrSteps += 1;
 
-            // gets called once per steptime
-            if (asyncfuture.valid()) {
-                asyncfuture.wait();
-                StepResult res = asyncfuture.get();
-                for (const auto& toerase : res.first) gameState.cells.erase(toerase);
-                for (const auto& tobirth : res.second) gameState.cells.insert(tobirth);
+            if (nrSteps > nrMaxSteps) {
+                gameState.accumulator = 0;
+                break;
             }
 
-            asyncfuture = std::async(std::launch::async, step, std::ref(gameState.cells));
+            simWorker.waitForWork();
+            editorState.cpuComputeTime = stepScratch.computeTime;
+            for (const auto& toerase : stepScratch.toErase) gameState.cells.erase(toerase);
+            for (const auto& tobirth : stepScratch.toBirth) gameState.cells.insert(tobirth);
+
+            gameState.stepcount++;
+
+            simWorker.submitWork(gameState.cells);
         }
+        nrSteps = 0;
     }
     
     SDL_SetRenderDrawColor(appState.renderer, 0, 0, 0, 255);
