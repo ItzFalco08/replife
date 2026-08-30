@@ -12,6 +12,7 @@
 #include <thread>
 #include "types.hpp"
 #include "SimWorker.hpp"
+#include "theme.hpp"
 
 namespace fs = std::filesystem;
 
@@ -71,7 +72,7 @@ int main() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImGui::StyleColorsDark();
+    init_imgui_theme();
 
     ImGui_ImplSDL3_InitForSDLRenderer(appState.window, appState.renderer);
     ImGui_ImplSDLRenderer3_Init(appState.renderer);
@@ -264,15 +265,6 @@ void draw_imgui() {
                 ImGui::SetTooltip("time taken (in seconds) to complete 1 step of conway's game of life.");
             }
 
-            ImGui::InputInt("step", &editorState.step, 1, 100, 0);
-            ImGui::SameLine();
-            if (ImGui::Button("Goto")) {
-                // TODO: jump simulation to editorState.step
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("goto a specific step");
-            }
-
             if (!patternFiles.empty()) {
                 // Build a list of display names (filename without extension), only once per frame
                 std::vector<std::string> names;
@@ -293,10 +285,9 @@ void draw_imgui() {
                 if (ImGui::Button("Load Pattern")) {
                     simWorker.waitForWork();
 
-                    gameState.cells.clear();
-                    gameState.accumulator = 0.0;
-                    gameState.isPlaying = false;
-                    editorState.step = 0;
+                    gameState = GameState();
+                    stepScratch = StepScratch();
+
                     load_pattern(patternFiles[editorState.selectedPatternIndex]);
                     populate_step_scratch();
                 }
