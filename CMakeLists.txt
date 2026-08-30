@@ -10,6 +10,8 @@ add_subdirectory(third_party/SDL)
 
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 
 target_link_libraries(replife PRIVATE imgui "SDL3::SDL3-static")
 
