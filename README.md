@@ -7,6 +7,7 @@
 - rle parser (import patterns encoded in rle)
 - memory efficient (stores only active cells)
 - multithreading (worker thread calculates the next step, while main thread updates the game state and renders)
+- batched rendered
 
 ## Todo:
 - editor mode (let you edit initial state visually)
