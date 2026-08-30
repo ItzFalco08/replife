@@ -19,7 +19,7 @@ void draw_imgui();
 void draw();
 void load_patterns_info();
 void load_pattern(const std::string& filePath);
-
+void populate_step_scratch();
 
 std::vector<std::string> patternFiles;
 
@@ -28,6 +28,12 @@ GameState gameState{};
 EditorState editorState{};
 
 SimWorker simWorker{};
+StepScratch stepScratch{};
+
+constexpr pos_t neighbours[8] = {
+    pack(-1, 0), pack(-1, -1), pack(0, -1), pack(1, -1),
+    pack(1, 0),  pack(1, 1),   pack(0, 1),  pack(-1, 1),
+};
 
 int main() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -71,14 +77,16 @@ int main() {
     ImGui_ImplSDLRenderer3_Init(appState.renderer);
     // -------------------
 
-
-    bool running = true;
-    SDL_Event event;
-
+    // --- Init ---
     appState.lastTime = static_cast<double>(SDL_GetTicks()) / 1000.0;
 
-    //push_dummy_data();
+    populate_step_scratch();
+
     load_patterns_info();
+    // -------------------
+
+    SDL_Event event;
+    bool running = true;
 
     while (running) {
         while (SDL_PollEvent(&event)) {
@@ -119,6 +127,17 @@ int main() {
     SDL_Quit();
 
     return 0;
+}
+
+void populate_step_scratch() {
+    // populate initial neighbour counts and candidates
+    for (auto& cell : gameState.cells) {
+        stepScratch.candidates.insert(cell);
+
+        for (auto& neighbour : neighbours) {
+            stepScratch.candidates.insert(cell + neighbour);
+        }
+    }
 }
 
 void load_patterns_info() {
@@ -193,7 +212,7 @@ void load_pattern(const std::string& filePath) {
             int n = (count == 0) ? 1 : count;
 
             for (int i = 0; i < n; i++) {
-                gameState.cells.insert(Vec2{ i + x, y });
+                gameState.cells.insert(pack( i + x, y ));
             }
 
             x = n + x;
@@ -240,7 +259,7 @@ void draw_imgui() {
         if (ImGui::BeginTabItem("Simulation")) {
             ImGui::Checkbox("play simulation", &gameState.isPlaying);
 
-            ImGui::SliderFloat("step time", &gameState.steptime, 0.010f, 1.0f, "%.3f", 0);
+            ImGui::SliderFloat("step time", &gameState.steptime, 0.002f, 1.0f, "%.3f", 0);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("time taken (in seconds) to complete 1 step of conway's game of life.");
             }
@@ -279,6 +298,7 @@ void draw_imgui() {
                     gameState.isPlaying = false;
                     editorState.step = 0;
                     load_pattern(patternFiles[editorState.selectedPatternIndex]);
+                    populate_step_scratch();
                 }
                 ImGui::EndDisabled();
             }
@@ -317,33 +337,33 @@ void draw_imgui() {
     ImGui::Render();
 }
 
-void step(const std::unordered_set<Vec2, Vec2Hasher>& cells, StepScratch& stepScratch) {
+void step(const std::unordered_set<int64_t>& cells, StepScratch& stepScratch) {
     auto start = std::chrono::steady_clock::now();
-    constexpr Vec2 neighbours[8] = {
-        {-1, 0}, {-1, -1}, {0, -1}, {1, -1},
-        {1, 0}, {1, 1}, {0, 1}, {-1, 1},
-    };
 
     stepScratch.toErase.clear();
     stepScratch.toBirth.clear();
-    stepScratch.neighbourCounts.clear();
 
-    for (auto& cell : cells) {
-        stepScratch.neighbourCounts[cell];
-        for (auto& neighbour: neighbours) {
-            stepScratch.neighbourCounts[cell + neighbour]++;
-        }
-    }
-
-    for (auto& [cell_, nc] : stepScratch.neighbourCounts) {
+    for (auto& cell_ : stepScratch.candidates) {
         bool isAlive = cells.contains(cell_);
-        
+
+        int nc = 0;
+        for (auto& n : neighbours) if (cells.contains(addDelta(n, cell_))) nc++;
+
         if (isAlive && (nc > 3 || nc < 2)) {
             stepScratch.toErase.push_back(cell_);
+            for (auto& neighbour : neighbours) {
+                stepScratch.nextCandidates.insert(addDelta(cell_, neighbour));
+            }
         } else if (nc == 3 && !isAlive) {
             stepScratch.toBirth.push_back(cell_);
+            for (auto& neighbour : neighbours) {
+                stepScratch.nextCandidates.insert(addDelta(cell_, neighbour));
+            }
         }
     }
+
+    stepScratch.candidates = std::move(stepScratch.nextCandidates);
+    stepScratch.nextCandidates.clear();
 
     // for benchmarking purposes
     auto end = std::chrono::steady_clock::now();
@@ -410,8 +430,8 @@ void draw_cells() {
         float squareSide = 50.0f * editorState.cameraZoom;
 
         // discard cells if it's out of the visible boundary
-        float screenX = editorState.cameraDrag.x + w / 2.0f + pos.x * squareSide;
-        float screenY = editorState.cameraDrag.y + h / 2.0f - pos.y * squareSide;
+        float screenX = editorState.cameraDrag.x + w / 2.0f + unpackX(pos) * squareSide;
+        float screenY = editorState.cameraDrag.y + h / 2.0f - unpackY(pos) * squareSide;
 
         if (screenX + squareSide < 0 || screenX > w ||
             screenY < 0 || screenY - squareSide > h)
@@ -422,19 +442,18 @@ void draw_cells() {
 
         editorState.nrCellsVisible++;
 
-        submitSquareDraw(editorState.cameraDrag.x + static_cast<float>(w / 2) + pos.x * squareSide, editorState.cameraDrag.y + static_cast<float>(h / 2) + -pos.y * squareSide, vertices, indices, squareSide);
+        submitSquareDraw(editorState.cameraDrag.x + static_cast<float>(w / 2) + unpackX(pos) * squareSide, editorState.cameraDrag.y + static_cast<float>(h / 2) + - unpackY(pos) * squareSide, vertices, indices, squareSide);
     }
 
     SDL_RenderGeometry(appState.renderer, nullptr, vertices.data(), vertices.size(), indices.data(), indices.size());
 }
 
-StepScratch stepScratch{};
 
 void draw() {
     calculate_delta_time();
     
     // limit main thread freeze due to accumulator compounding
-    static constexpr int nrMaxSteps = 4;
+    static constexpr int nrMaxSteps = 3;
     static int nrSteps = 0;
 
     // step logic

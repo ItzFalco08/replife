@@ -2,39 +2,25 @@
 #include <functional>
 #include <unordered_map>
 
-struct Vec2 {
-    int x, y;
+using pos_t = int64_t;
 
-    bool operator==(const Vec2& other) const {
-        return x == other.x && y == other.y;
-    }
+inline constexpr pos_t pack(int32_t x, int32_t y) noexcept {
+    return (static_cast<int64_t>(static_cast<uint32_t>(x)) << 32)
+        | static_cast<uint32_t>(y);
+}
 
-    Vec2 operator+(const Vec2& other) const {
-        return { x + other.x, y + other.y };
-    }
+inline constexpr int32_t unpackX(pos_t key) noexcept {
+    return static_cast<int32_t>(static_cast<uint32_t>(key >> 32));
+}
 
-    Vec2 operator-(const Vec2& other) const {
-        return { x - other.x, y - other.y };
-    }
+inline constexpr int32_t unpackY(pos_t key) noexcept {
+    return static_cast<int32_t>(static_cast<uint32_t>(key & 0xFFFFFFFFu));
+}
 
-    Vec2& operator+=(const Vec2& other) {
-        x += other.x;
-        y += other.y;
-        return *this;
-    }
+inline constexpr pos_t addDelta(pos_t cell, pos_t delta) noexcept {
+    return pack(unpackX(cell) + unpackX(delta), unpackY(cell) + unpackY(delta));
+}
 
-    Vec2& operator-=(const Vec2& other) {
-        x -= other.x;
-        y -= other.y;
-        return *this;
-    }
-
-    Vec2& operator*=(int scalar) {
-        x *= scalar;
-        y *= scalar;
-        return *this;
-    }
-};
 
 struct Vec2f {
     float x, y;
@@ -70,13 +56,6 @@ struct Vec2f {
     }
 };
 
-struct Vec2Hasher {
-    std::size_t operator()(const Vec2& p) const {
-        return std::hash<int>{}(p.x) ^
-            (std::hash<int>{}(p.y) << 1);
-    }
-};
-
 struct AppState {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
@@ -86,7 +65,7 @@ struct AppState {
 };
 
 struct GameState {
-    std::unordered_set<Vec2, Vec2Hasher> cells;
+    std::unordered_set<pos_t> cells;
     bool isPlaying = false;
     float accumulator = 0.0f;
     float steptime = 1.0f;
@@ -105,14 +84,16 @@ struct EditorState {
 };
 
 struct StepScratch {
-    std::vector<Vec2> toErase;
-    std::vector<Vec2> toBirth;
-    std::unordered_map<Vec2, int, Vec2Hasher> neighbourCounts;
+    std::vector<pos_t> toErase;
+    std::vector<pos_t> toBirth;
+    std::unordered_set<pos_t> candidates;
+    std::unordered_set<pos_t> nextCandidates;
+
     double computeTime = 0.0;
 };
 
 struct StepResult {
-    std::vector<Vec2> toErase{};
-    std::vector<Vec2> toBirth{};
+    std::vector<pos_t> toErase{};
+    std::vector<pos_t> toBirth{};
     double computeTime = 0.0;
 };

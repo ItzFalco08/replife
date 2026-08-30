@@ -8,7 +8,7 @@
 
 // forward declaration
 extern StepScratch stepScratch;
-void step(const std::unordered_set<Vec2, Vec2Hasher>& cells, StepScratch& stepScratch);
+void step(const std::unordered_set<pos_t>& cells, StepScratch& stepScratch);
 
 class SimWorker {
 	std::thread worker;
@@ -16,7 +16,7 @@ class SimWorker {
 	bool workDone = true;
 	bool startWork = false;
 	bool killThread = false;
-	std::unordered_set<Vec2, Vec2Hasher>* cells_ptr = nullptr;
+	std::unordered_set<pos_t>* cells_ptr = nullptr;
 	std::condition_variable cv;
 
 	void run() {
@@ -48,7 +48,7 @@ public:
 		worker.join();
 	}
 
-	void submitWork(std::unordered_set<Vec2, Vec2Hasher>& cells) {
+	void submitWork(std::unordered_set<pos_t>& cells) {
 		{
 			std::lock_guard lock(mtx);
 			cells_ptr = &cells;
